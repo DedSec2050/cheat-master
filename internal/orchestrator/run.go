@@ -5,6 +5,7 @@ import (
 
 	"cheat-master/internal/client"
 	"cheat-master/internal/courses"
+	"cheat-master/internal/display"
 	"cheat-master/internal/executor"
 	"cheat-master/internal/models"
 )
@@ -66,33 +67,77 @@ func Run(email, password string) {
 	// Fetch course
 	course, _ := courses.GetCourse(c, selected)
 
-	// Group weeks
-	weeks := courses.GroupByWeek(course)
+	// Display incomplete lectures with icons
+	display.DisplayIncompleteByWeek(course)
+
+	// Ask if user wants to proceed
+	fmt.Print("\nProceed with execution? (y/n): ")
+	var proceed string
+	fmt.Scanln(&proceed)
+
+	if proceed != "y" && proceed != "Y" {
+		fmt.Println("Cancelled.")
+		return
+	}
+
+	// Get only weeks with incomplete lectures
+	incompleteWeeks := courses.GetIncompleteByWeek(course)
 
 	// Select week
-	lectures := selectWeek(weeks)
+	lectures := selectWeek(incompleteWeeks)
 
 	fmt.Println("\n🎯 Starting execution...")
 
-	for _, lec := range lectures {
-		if lec.IsCompleted {
-			continue
+	// Keep track of lectures to process
+	lecturesToProcess := lectures
+	attempt := 0
+	maxPolls := 6
+
+	for len(lecturesToProcess) > 0 {
+		var nextRound []models.Lecture
+
+		for _, lec := range lecturesToProcess {
+			if lec.IsCompleted {
+				continue
+			}
+
+			fmt.Println("\n▶ Watching:", lec.Title)
+
+			// Try 5-6 polls for this lecture
+			for poll := 0; poll < maxPolls; poll++ {
+				executor.WatchLecture(c, selected, lec.ID, 200, email, password)
+
+				updated, _ := courses.GetCourse(c, selected)
+
+				if courses.IsLectureCompleted(updated, lec.ID) {
+					fmt.Println("✅ Completed:", lec.Title)
+					break
+				}
+
+				if poll < maxPolls-1 {
+					fmt.Printf("⏳ Poll %d/%d: Still incomplete, retrying...\n", poll+1, maxPolls)
+				}
+			}
+
+			// Check again after polls
+			updated, _ := courses.GetCourse(c, selected)
+			if !courses.IsLectureCompleted(updated, lec.ID) {
+				// Still incomplete, add to next round
+				nextRound = append(nextRound, lec)
+				fmt.Printf("⚠ Moving to next lecture, will retry: %s\n", lec.Title)
+			}
 		}
 
-		fmt.Println("\n▶ Watching:", lec.Title)
+		// Prepare for next round
+		lecturesToProcess = nextRound
+		attempt++
 
-		// simulate watch
-		executor.WatchLecture(c, selected, lec.ID, 200)
-
-		// verify
-		updated, _ := courses.GetCourse(c, selected)
-
-		if courses.IsLectureCompleted(updated, lec.ID) {
-			fmt.Println("✅ Completed:", lec.Title)
-		} else {
-			fmt.Println("⚠ Still incomplete:", lec.Title)
+		if len(lecturesToProcess) > 0 {
+			fmt.Printf("\n📊 Round %d: %d lectures still incomplete, retrying...\n", attempt, len(lecturesToProcess))
 		}
 	}
+
+	fmt.Println("\n✅ All lectures completed!")
 }
 
 

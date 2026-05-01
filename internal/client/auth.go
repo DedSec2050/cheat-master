@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 )
 
 func (v *VTUClient) Login(email, password string) error {
@@ -27,6 +28,10 @@ func (v *VTUClient) Login(email, password string) error {
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("login failed: %s", resp.Status)
 	}
+
+	// Explicitly store new cookies to ensure fresh token is used
+	baseURL, _ := url.Parse(v.Base)
+	v.Client.Jar.SetCookies(baseURL, resp.Cookies())
 
 	return nil
 }
