@@ -1,0 +1,32 @@
+package client
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+)
+
+func (v *VTUClient) Login(email, password string) error {
+	payload := map[string]string{
+		"email":    email,
+		"password": password,
+	}
+
+	body, _ := json.Marshal(payload)
+
+	req, _ := http.NewRequest("POST", v.Base+"/auth/login", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := v.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("login failed: %s", resp.Status)
+	}
+
+	return nil
+}
