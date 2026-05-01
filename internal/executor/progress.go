@@ -17,19 +17,13 @@ func WatchLecture(c *client.VTUClient, slug string, lectureID int, total int, em
 	url := fmt.Sprintf("%s/student/my-courses/%s/lectures/%d/progress",
 		c.Base, slug, lectureID)
 
-	chunk := total / 5 // simulate chunks
-	current := 0
-
-	for i := 0; i < 10; i++ { // polling loop
-		current += chunk
-		if current > total {
-			current = total
-		}
+	// Send progress 5-6 times to ensure it registers
+	for i := 0; i < 6; i++ { // polling loop
 
 		payload := map[string]int{
-			"current_time_seconds":  total,  // Incrementally increasing
-			"total_duration_seconds": total,
-			"seconds_just_watched":  total,   // Amount watched in this poll
+			"current_time_seconds":  3000,   // Send TOTAL duration to mark as "watched"
+			"total_duration_seconds": 3000,  // Full duration
+			"seconds_just_watched":  3000,   // Full duration watched (like manual test)
 		}
 
 		body, _ := json.Marshal(payload)
@@ -37,7 +31,7 @@ func WatchLecture(c *client.VTUClient, slug string, lectureID int, total int, em
 		req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json")
-		req.Header.Set("User-Agent", "Go-Http-Client")
+		req.Header.Set("User-Agent", "Go-Test-Client")
 
 		resp, err := c.Client.Do(req)
 		if err != nil {
@@ -104,11 +98,7 @@ func WatchLecture(c *client.VTUClient, slug string, lectureID int, total int, em
 			fmt.Printf("📊 Requests Remaining: %s\n", remaining)
 		}
 
-		fmt.Printf("⏱ Lecture %d progress: %d/%d\n", lectureID, current, total)
-
-		if current == total {
-			break
-		}
+		fmt.Printf("⏱ Lecture %d progress: %d/%d\n", lectureID, total, total)
 
 		// Re-login to get fresh access token
 		fmt.Printf("🔄 Getting fresh access token...\n")

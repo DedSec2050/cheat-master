@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"sync"
 
 	"cheat-master/internal/client"
 	"cheat-master/internal/courses"
@@ -9,45 +10,6 @@ import (
 	"cheat-master/internal/executor"
 	"cheat-master/internal/models"
 )
-
-// func Run(email, password string) {
-// 	c := client.NewClient()
-
-// 	// 1. Login
-// 	err := c.Login(email, password)
-// 	if err != nil {
-// 		panic(err)
-// 	}
-
-// 	// 2. Get enrollments
-// 	slugs, err := courses.GetEnrollments(c)
-// 	if err != nil {
-// 		panic(err)
-// 	}
-
-// 	fmt.Println("Courses:", slugs)
-
-// 	// 3. Process each course
-// 	for _, slug := range slugs {
-// 		fmt.Println("\nProcessing:", slug)
-
-// 		course, err := courses.GetCourse(c, slug)
-// 		if err != nil {
-// 			continue
-// 		}
-
-// 		pending := courses.GetPendingLectures(course)
-
-// 		fmt.Println("Pending lectures:", len(pending))
-
-// 		for _, lecID := range pending {
-// 			executor.MarkComplete(c, slug, lecID)
-// 			time.Sleep(2 * time.Second)
-// 		}
-// 	}
-
-// 	fmt.Println("\n🎯 Done")
-// }
 
 
 func Run(email, password string) {
@@ -86,7 +48,7 @@ func Run(email, password string) {
 	// Select week
 	lectures := selectWeek(incompleteWeeks)
 
-	fmt.Println("\n🎯 Starting execution...")
+	fmt.Println("\n🎯 Starting execution (Concurrent Mode)...")
 
 	// Keep track of lectures to process
 	lecturesToProcess := lectures
@@ -95,38 +57,57 @@ func Run(email, password string) {
 
 	for len(lecturesToProcess) > 0 {
 		var nextRound []models.Lecture
+		var mu sync.Mutex
+		var wg sync.WaitGroup
 
 		for _, lec := range lecturesToProcess {
 			if lec.IsCompleted {
 				continue
 			}
 
-			fmt.Println("\n▶ Watching:", lec.Title)
+			wg.Add(1)
+			go func(lecture models.Lecture) {
+				defer wg.Done()
 
-			// Try 5-6 polls for this lecture
-			for poll := 0; poll < maxPolls; poll++ {
-				executor.WatchLecture(c, selected, lec.ID, 200, email, password)
-
-				updated, _ := courses.GetCourse(c, selected)
-
-				if courses.IsLectureCompleted(updated, lec.ID) {
-					fmt.Println("✅ Completed:", lec.Title)
-					break
+				// Create separate client for this lecture
+				lectureClient := client.NewClient()
+				if err := lectureClient.Login(email, password); err != nil {
+					fmt.Printf("❌ Login failed for %s: %v\n", lecture.Title, err)
+					return
 				}
 
-				if poll < maxPolls-1 {
-					fmt.Printf("⏳ Poll %d/%d: Still incomplete, retrying...\n", poll+1, maxPolls)
-				}
-			}
+				fmt.Printf("\n▶ Watching [Goroutine]: %s\n", lecture.Title)
 
-			// Check again after polls
-			updated, _ := courses.GetCourse(c, selected)
-			if !courses.IsLectureCompleted(updated, lec.ID) {
-				// Still incomplete, add to next round
-				nextRound = append(nextRound, lec)
-				fmt.Printf("⚠ Moving to next lecture, will retry: %s\n", lec.Title)
-			}
+				// Try 5-6 polls for this lecture
+				for poll := 0; poll < maxPolls; poll++ {
+					executor.WatchLecture(lectureClient, selected, lecture.ID, 200, email, password)
+
+					updated, _ := courses.GetCourse(lectureClient, selected)
+
+					if courses.IsLectureCompleted(updated, lecture.ID) {
+						fmt.Printf("✅ Completed [Goroutine]: %s\n", lecture.Title)
+						return
+					}
+
+					if poll < maxPolls-1 {
+						fmt.Printf("⏳ Poll %d/%d: Still incomplete, retrying... [%s]\n", poll+1, maxPolls, lecture.Title)
+					}
+				}
+
+				// Check again after polls
+				updated, _ := courses.GetCourse(lectureClient, selected)
+				if !courses.IsLectureCompleted(updated, lecture.ID) {
+					// Still incomplete, add to next round
+					mu.Lock()
+					nextRound = append(nextRound, lecture)
+					mu.Unlock()
+					fmt.Printf("⚠ Moving to next round, will retry: %s\n", lecture.Title)
+				}
+			}(lec)
 		}
+
+		// Wait for all goroutines to complete
+		wg.Wait()
 
 		// Prepare for next round
 		lecturesToProcess = nextRound
